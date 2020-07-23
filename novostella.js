@@ -1,6 +1,5 @@
 const TuyaDev = require('tuyapi');
 const {getHumanTimeStamp} = require('./lib/utils');
-//const {keyRename,getHumanTimeStamp,checkValidJSON,filterCommandByte} = require('./lib/utils');
 const formats = require('./formatvalues.js');
 
 module.exports = function(RED) {
@@ -15,9 +14,15 @@ module.exports = function(RED) {
 		this.Ip = config.devIp;
 		this.version = config.protocolVer;
 		this.topicDelim = '/';
+		this.states = {
+			on: false,
+			mode: "n/a",
+			brightness: -1,
+			temperature: -1
+		};
 		//this.renameSchema = config.renameSchema;
 		//this.filterCB = config.filterCB;
-		const dev_info =  {name:this.Name,ip:this.Ip,id:this.Id};
+		const dev_info =  {name:this.Name, ip:this.Ip, id:this.Id};
 		const device = new TuyaDev({
 			id: this.Id,
 			key: this.Key,
@@ -68,6 +73,26 @@ module.exports = function(RED) {
 			}
 		}
 
+		function parseDPS(dps) {
+			if (dps.hasOwnProperty('20')) {
+				node.states.on = dps[20];
+			}
+
+			if (dps.hasOwnProperty('21')) {
+				node.states.mode = dps[21];
+			}
+
+			if (dps.hasOwnProperty('22')) {
+				node.states.brightness = dps[22] / 10;
+			}
+
+			if (dps.hasOwnProperty('23')) {
+				node.states.temperature = dps[23];
+			}
+
+			console.log('states = ' + JSON.stringify(node.states));
+		}
+
 		connectToDevice(10,'Deploy connection request for device ' + this.Name);
 
 		device.on('disconnected', () => {
@@ -104,17 +129,32 @@ module.exports = function(RED) {
 		});
 
 		device.on('data', (data,commandByte) => {
-			if ("commandByte" !== null ) {
-				dev_info.available = true;
-				//if (this.renameSchema !== undefined || this.renameSchema !== null) {
-				//	data.dps = checkValidJSON(this.renameSchema) ? keyRename(data.dps,JSON.parse(this.renameSchema)) : data.dps;
-				//}
-				msg = {data:dev_info,commandByte:commandByte,payload:data};
-				//if (this.filterCB !== "") {
-				//	node.send(filterCommandByte(msg,this.filterCB));
-				//} else {
+			try {
+				if ("commandByte" !== null ) {
+					dev_info.available = true;
+
+					if (data.hasOwnProperty('dps')) {
+						parseDPS(data.dps);
+
+						if (node.states.on) {
+							node.status({fill:"green", shape:"dot", text:"ON"});
+						} else {
+							node.status({fill:"red", shape:"dot", text:"OFF"});
+						}
+					}
+
+					msg = {
+						data: dev_info, 
+						commandByte: commandByte,
+						raw: data,
+						topic: "update",
+						payload: node.states
+					};
+
 					node.send(msg);
-				//}
+				}
+			} catch (err) {
+				RED.log.error(err);
 			}
 		});
 
@@ -124,30 +164,43 @@ module.exports = function(RED) {
 			
 			try {
 				if (topic.toUpperCase() === 'ON') {
-					let on = formats.FormatValue(formats.Formats.BOOL, 'on', msg.payload);
-					setDevice(on);
-				} else if (topic.toUpperCase() === 'WHITE') {
+					let v = formats.FormatValue(formats.Formats.BOOL, 'on', msg.payload);
 					let d = {
-						multiple: true,
-						data: {
-							"20": true,
-							"21": "white",
-							"22": 1000,		// brightness [10:1000]
-							"23": 0			// temperature [0:1000]
-						}
+						set: v,
+						dps: 20
+					};
+
+					device.set(d);
+
+					if (v) {
+						node.status({fill:"green", shape:"dot", text:"ON"});
+					} else {
+						node.status({fill:"red", shape:"dot", text:"OFF"});
+					}
+			} else if (topic.toUpperCase() === 'WHITE') {
+					let d = {
+						"20": true,
+						"21": "white",
+						"22": 1000,		// brightness [10:1000]
+						"23": 0			// temperature [0:1000]
 					};
 
 					if (msg.payload.hasOwnProperty('brightness')) {
 						let v = formats.FormatValue(formats.Formats.INT, 'brightness', msg.payload.brightness);
-						d.data[22] = v;
+						d[22] = v * 10;
 					}
 
 					if (msg.payload.hasOwnProperty('temperature')) {
 						let v = formats.FormatValue(formats.Formats.INT, 'temperature', msg.payload.temperature);
-						d.data[23] = v;
+						d[23] = v;
 					}
 
-					setDevice(d);
+					device.set({
+						multiple: true,
+						data: d
+					});
+
+					node.status({fill:"green", shape:"dot", text:"ON"});
 				} else if (topic.toUpperCase() === 'COLOR') {
 
 				} else {
@@ -171,5 +224,6 @@ module.exports = function(RED) {
 			done();
 		});
 	}
+
 	RED.nodes.registerType("tuya-novostella", TuyaNovostellaNode);
 }
