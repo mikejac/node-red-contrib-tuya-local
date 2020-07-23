@@ -89,8 +89,6 @@ module.exports = function(RED) {
 			if (dps.hasOwnProperty('23')) {
 				node.states.temperature = dps[23];
 			}
-
-			console.log('states = ' + JSON.stringify(node.states));
 		}
 
 		connectToDevice(10,'Deploy connection request for device ' + this.Name);
